@@ -37,7 +37,7 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
 	"sigs.k8s.io/cloud-provider-azure/tests/e2e/utils"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
@@ -53,9 +53,12 @@ var (
 	serviceAnnotationLoadBalancerInternalTrue = map[string]string{
 		consts.ServiceAnnotationLoadBalancerInternal: "true",
 	}
+	serviceAnnotationDisableLoadBalancerFloatingIP = map[string]string{
+		consts.ServiceAnnotationDisableLoadBalancerFloatingIP: "true",
+	}
 )
 
-var _ = Describe("Ensure LoadBalancer", func() {
+var _ = Describe("Ensure LoadBalancer", FlakeAttempts(3), func() {
 	basename := "service-lb"
 
 	var cs clientset.Interface
@@ -408,7 +411,7 @@ var _ = Describe("Ensure LoadBalancer", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	It("should have no operation since no change in service when update [Slow]", func() {
+	It("should have no operation since no change in service when update", Label(utils.TestSuiteLabelSlow), func() {
 		suffix := string(uuid.NewUUID())[0:4]
 		ipName := basename + "-public-remain" + suffix
 		pip, err := utils.WaitCreatePIP(tc, ipName, tc.GetResourceGroup(), defaultPublicIPAddress(ipName))
@@ -699,6 +702,41 @@ var _ = Describe("Ensure LoadBalancer", func() {
 		Expect(err).NotTo(HaveOccurred())
 		err = waitForNodesInLBBackendPool(tc, publicIP, len(nodes))
 		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should support disabling floating IP in load balancer rule with kubernetes service annotations", func() {
+		By("creating a public IP with tags")
+		ipName := basename + "-public-IP" + string(uuid.NewUUID())[0:4]
+		pip := defaultPublicIPAddress(ipName)
+		pip, err := utils.WaitCreatePIP(tc, ipName, tc.GetResourceGroup(), pip)
+		Expect(err).NotTo(HaveOccurred())
+		targetIP := to.String(pip.IPAddress)
+		utils.Logf("created pip with address %s", targetIP)
+
+		By("creating a service referencing the public IP")
+		service := utils.CreateLoadBalancerServiceManifest(testServiceName, serviceAnnotationDisableLoadBalancerFloatingIP, labels, ns.Name, ports)
+		service = updateServiceBalanceIP(service, false, targetIP)
+		_, err = cs.CoreV1().Services(ns.Name).Create(context.TODO(), service, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		ip, err := utils.WaitServiceExposureAndValidateConnectivity(cs, ns.Name, testServiceName, "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ip).To(Equal(targetIP))
+
+		defer func() {
+			By("cleaning up")
+			err = utils.DeleteService(cs, ns.Name, testServiceName)
+			Expect(err).NotTo(HaveOccurred())
+			err = utils.DeletePIPWithRetry(tc, ipName, "")
+			Expect(err).NotTo(HaveOccurred())
+		}()
+
+		By("testing if floating IP disabled in load balancer rule")
+		lb := getAzureLoadBalancerFromPIP(tc, ip, tc.GetResourceGroup(), "")
+		lbRules := lb.LoadBalancingRules
+		Expect(len(*lbRules)).To(Equal(len(ports)))
+		for _, lbRule := range *lbRules {
+			Expect(to.Bool(lbRule.EnableFloatingIP)).To(BeFalse())
+		}
 	})
 })
 

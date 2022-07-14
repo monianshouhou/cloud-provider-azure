@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
@@ -41,7 +42,7 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
 	"sigs.k8s.io/cloud-provider-azure/tests/e2e/utils"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
@@ -58,7 +59,7 @@ const (
 	nginxStatusCode = 200
 )
 
-var _ = Describe("Service with annotation", func() {
+var _ = Describe("Service with annotation", FlakeAttempts(3), func() {
 	basename := "service"
 	serviceName := "annotation-test"
 	initSuccess := false
@@ -447,6 +448,11 @@ var _ = Describe("Service with annotation", func() {
 	})
 
 	It("should support service annotation `service.beta.kubernetes.io/azure-pip-prefix-id`", func() {
+		if skuEnv := os.Getenv(utils.LoadBalancerSkuEnv); skuEnv != "" {
+			if !strings.EqualFold(skuEnv, string(network.PublicIPAddressSkuNameStandard)) {
+				Skip("pip-prefix-id only work with Standard Load Balancer")
+			}
+		}
 		const (
 			prefix1Name = "prefix1"
 			prefix2Name = "prefix2"
@@ -586,7 +592,7 @@ var _ = Describe("Service with annotation", func() {
 	})
 })
 
-var _ = Describe("[[Multi-Nodepool]][VMSS]", func() {
+var _ = Describe("Multiple VMSS", Label(utils.TestSuiteLabelMultiNodePools, utils.TestSuiteLabelVMSS), func() {
 	basename := "vmssservice"
 	serviceName := "vmss-test"
 
@@ -805,7 +811,7 @@ var _ = Describe("Multi-ports service", func() {
 
 			var lb *network.LoadBalancer
 			//wait for backend update
-			err = wait.PollImmediate(5*time.Second, 60*time.Second, func() (bool, error) {
+			err = wait.PollImmediate(5*time.Second, 2*time.Minute, func() (bool, error) {
 				lb = getAzureLoadBalancerFromPIP(tc, publicIP, tc.GetResourceGroup(), "")
 				return len(*lb.LoadBalancerPropertiesFormat.Probes) == 1 && *(*lb.LoadBalancerPropertiesFormat.Probes)[0].Port == service.Spec.HealthCheckNodePort, nil
 			})
@@ -827,7 +833,7 @@ var _ = Describe("Multi-ports service", func() {
 			utils.Logf("Successfully updated LoadBalancer service " + serviceName + " in namespace " + ns.Name)
 
 			//wait for backend update
-			err = wait.PollImmediate(5*time.Second, 60*time.Second, func() (bool, error) {
+			err = wait.PollImmediate(5*time.Second, 2*time.Minute, func() (bool, error) {
 				lb := getAzureLoadBalancerFromPIP(tc, publicIP, tc.GetResourceGroup(), "")
 				return len(*lb.LoadBalancerPropertiesFormat.Probes) == 2 &&
 					*(*lb.LoadBalancerPropertiesFormat.Probes)[0].Port != nodeHealthCheckPort &&
