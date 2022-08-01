@@ -1,8 +1,9 @@
-pr:
+trigger:
+  batch: true
   branches:
     exclude:
     - '*'
-    
+
 pool:
   vmImage: ubuntu-18.04
 
