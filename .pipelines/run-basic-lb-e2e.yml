@@ -1,13 +1,8 @@
-trigger:
-  batch: true
-  branches:
-    include:
-    - '*'
-
 pr:
   branches:
     exclude:
     - '*'
+    
 pool:
   vmImage: ubuntu-18.04
 
