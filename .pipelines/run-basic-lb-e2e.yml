@@ -93,3 +93,4 @@ stages:
             SP_CLIENT_ID: $(sp.client_id)
             SP_CLIENT_SECRET: $(sp.client_secret)
             AZ_K8S_VERSION: $(az.k8s_version)
+
