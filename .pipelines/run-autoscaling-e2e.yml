@@ -1,11 +1,13 @@
 schedules:
-- cron: "0 10 * * *"
+- cron: "0 11 * * *"
   displayName: Daily AKS Autoscaling E2E Test
   branches:
     include:
     - master
 
 pr: none
+
+trigger: none
 
 pool:
   vmImage: ubuntu-18.04
