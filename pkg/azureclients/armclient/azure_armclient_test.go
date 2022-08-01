@@ -19,7 +19,7 @@ package armclient
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -338,6 +338,19 @@ func TestGetResource(t *testing.T) {
 				return armClient.GetResourceWithExpandAPIVersionQuery(ctx, testResourceID, "", apiVersion)
 			},
 		},
+		{
+			description:         "GetResourceWithQueries",
+			expectedURIResource: "/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/testPIP?api-version=2019-01-01&param1=value1&param2=value2",
+			apiVersion:          "2019-01-01",
+			expectedAPIVersion:  "2019-01-01",
+			params: map[string]interface{}{
+				"param1": "value1",
+				"param2": "value2",
+			},
+			getResource: func(ctx context.Context, armClient *Client, apiVersion string, params map[string]interface{}) (*http.Response, *retry.Error) {
+				return armClient.GetResourceWithQueries(ctx, testResourceID, params)
+			},
+		},
 	}
 
 	for _, tc := range testcases {
@@ -359,7 +372,7 @@ func TestGetResource(t *testing.T) {
 			response, rerr := tc.getResource(ctx, armClient, tc.expectedAPIVersion, tc.params)
 			assert.Nil(t, rerr)
 			assert.NotNil(t, response)
-			byteResponseBody, _ := ioutil.ReadAll(response.Body)
+			byteResponseBody, _ := io.ReadAll(response.Body)
 			stringResponseBody := string(byteResponseBody)
 			assert.Equal(t, "{data: testPIP}", stringResponseBody)
 			assert.Equal(t, 1, count)

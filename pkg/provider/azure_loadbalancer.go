@@ -1002,6 +1002,9 @@ func (az *Cloud) ensurePublicIPExists(service *v1.Service, pipName string, domai
 		}
 		klog.V(2).Infof("ensurePublicIPExists for service(%s): pip(%s) - creating", serviceName, *pip.Name)
 	}
+	if az.ensurePIPTagged(service, &pip) {
+		changed = true
+	}
 
 	if foundDNSLabelAnnotation {
 		updatedDNSSettings, err := reconcileDNSSettings(&pip, domainNameLabel, serviceName, pipName)
@@ -1767,7 +1770,7 @@ func (az *Cloud) reconcileFrontendIPConfigs(clusterName string, service *v1.Serv
 				}
 
 				if !existsSubnet {
-					return nil, toDeleteConfigs, false, fmt.Errorf("ensure(%s): lb(%s) - failed to get subnet: %s/%s", serviceName, lbName, az.VnetName, az.SubnetName)
+					return nil, toDeleteConfigs, false, fmt.Errorf("ensure(%s): lb(%s) - failed to get subnet: %s/%s", serviceName, lbName, az.VnetName, *subnetName)
 				}
 
 				configProperties := network.FrontendIPConfigurationPropertiesFormat{
@@ -2209,7 +2212,7 @@ func (az *Cloud) getExpectedLBRules(
 	return expectedProbes, expectedRules, nil
 }
 
-//getDefaultLoadBalancingRulePropertiesFormat returns the loadbalancing rule for one port
+// getDefaultLoadBalancingRulePropertiesFormat returns the loadbalancing rule for one port
 func (az *Cloud) getExpectedLoadBalancingRulePropertiesForPort(
 	service *v1.Service,
 	lbFrontendIPConfigID string,
@@ -2265,7 +2268,7 @@ func (az *Cloud) getExpectedLoadBalancingRulePropertiesForPort(
 	return props, nil
 }
 
-//getExpectedHAModeLoadBalancingRuleProperties build load balancing rule for lb in HA mode
+// getExpectedHAModeLoadBalancingRuleProperties build load balancing rule for lb in HA mode
 func (az *Cloud) getExpectedHAModeLoadBalancingRuleProperties(
 	service *v1.Service,
 	lbFrontendIPConfigID string,
