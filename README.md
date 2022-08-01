@@ -4,7 +4,6 @@
 [![Coverage Status](https://coveralls.io/repos/github/kubernetes-sigs/cloud-provider-azure/badge.svg?branch=master)](https://coveralls.io/github/kubernetes-sigs/cloud-provider-azure?branch=master)
 [![GitHub stars](https://img.shields.io/github/stars/kubernetes-sigs/cloud-provider-azure.svg)](https://github.com/kubernetes-sigs/cloud-provider-azure/stargazers)
 [![GitHub stars](https://img.shields.io/badge/contributions-welcome-orange.svg)](https://github.com/kubernetes-sigs/cloud-provider-azure/blob/master/CONTRIBUTING.md)
-[![Build Status](https://dev.azure.com/azure-sdk/public/_apis/build/status/go/Azure.azure-sdk-for-go?branchName=main)](https://dev.azure.com/azure-sdk/public/_build/latest?definitionId=640&branchName=main)
 [![Build Status](https://msazure.visualstudio.com/CloudNativeCompute/_apis/build/status/AKS/cloud-provider-azure/kubernetes-sigs.cloud-provider-azure.basic_lb?branchName=master)](https://msazure.visualstudio.com/CloudNativeCompute/_build?definitionId=282180&branchName=master)
 
 ## Introduction
