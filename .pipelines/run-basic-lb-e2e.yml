@@ -6,7 +6,7 @@ trigger:
 
 pr:
   branches:
-    exclude:
+    include:
     - '*'
 pool:
   vmImage: ubuntu-18.04
