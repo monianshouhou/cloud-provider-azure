@@ -1,14 +1,13 @@
+trigger:
+  batch: true
+  branches:
+    include:
+    - '*'
+
 pr:
   branches:
     include:
-    - master
-    - release-*
-  paths:
-    exclude:
-    - docs
-    - site
-    - helm
-    - .github
+    - '*'
 
 pool:
   vmImage: ubuntu-18.04
