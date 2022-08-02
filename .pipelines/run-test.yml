@@ -16,6 +16,7 @@ variables:
 - name: DisableDockerDetector
   value: true
 
+  
 stages:
   - stage: run_basic_lb_e2e
     dependsOn: []
