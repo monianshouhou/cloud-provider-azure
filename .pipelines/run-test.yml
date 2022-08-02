@@ -5,7 +5,10 @@ schedules:
     include:
     - master
 
-trigger: none
+trigger: 
+  branches:
+    include:
+    - '*'
 
 pr:
   branches:
