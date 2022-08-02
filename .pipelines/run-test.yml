@@ -1,7 +1,11 @@
-trigger:
+schedules:
+- cron: "0 10 * * *"
+  displayName: Daily GC
   branches:
     include:
-    - '*'
+    - master
+
+trigger: none
 
 pr:
   branches:
@@ -16,7 +20,6 @@ variables:
 - name: DisableDockerDetector
   value: true
 
-  
 stages:
   - stage: run_basic_lb_e2e
     dependsOn: []
