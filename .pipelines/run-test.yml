@@ -1,9 +1,9 @@
 schedules:
-- cron: "0 4 * * *"
+- cron: "0 5 * * *"
   displayName: Daily GC
   branches:
     include:
-    - '*'
+    - master
 
 trigger: 
   branches:
