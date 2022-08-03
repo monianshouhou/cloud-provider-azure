@@ -22,6 +22,8 @@ variables:
 - group: aks-ci
 - name: DisableDockerDetector
   value: true
+- name: k8s_version
+  value: 1.23.0
 
 stages:
   - stage: run_basic_lb_e2e
@@ -34,9 +36,12 @@ stages:
             git show --stat
             echo $REGISTRY_PASSWORD | docker login $REGISTRY_URL -u $REGISTRY_USERNAME --password-stdin
             export IMAGE_REGISTRY=$REGISTRY_URL
-            echo "finished"
+            echo "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            echo ${AZ_K8S_VERSION}
+            echo "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
           displayName: make and push ccm image
           env:
             REGISTRY_URL: $(registry.url)
             REGISTRY_USERNAME: $(registry.username)
             REGISTRY_PASSWORD: $(registry.password)
+            AZ_K8S_VERSION: $(k8s_version)
