@@ -22,7 +22,7 @@ variables:
 - group: aks-ci
 - name: DisableDockerDetector
   value: true
-- name: k8s_version
+- name: k8s_versio
   value: "1.23.0"
 
 stages:
@@ -44,4 +44,4 @@ stages:
             REGISTRY_URL: $(registry.url)
             REGISTRY_USERNAME: $(registry.username)
             REGISTRY_PASSWORD: $(registry.password)
-            AZ_K8S_VERSION: $(k8s_version)
+            AZ_K8S_VERSION: $(k8s_versio)
