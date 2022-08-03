@@ -19,11 +19,7 @@ pool:
   vmImage: ubuntu-18.04
 
 variables:
-- group: aks-ci
-- name: DisableDockerDetector
-  value: true
-- name: k8sVersion
-  value: "1.23.0"
+- template: var.yml
 
 stages:
   - stage: run_basic_lb_e2e
