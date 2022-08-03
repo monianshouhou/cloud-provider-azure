@@ -23,7 +23,7 @@ variables:
 - name: DisableDockerDetector
   value: true
 - name: k8s_version
-  value: 1.23.0
+  value: "1.23.0"
 
 stages:
   - stage: run_basic_lb_e2e
