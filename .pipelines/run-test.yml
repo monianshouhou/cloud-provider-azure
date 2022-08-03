@@ -34,12 +34,15 @@ stages:
       steps:
         - bash: |
             git show --stat
+            echo $REGISTRY_URL
+            echo $AZ_TENANT_ID
             echo $REGISTRY_PASSWORD | docker login $REGISTRY_URL -u $REGISTRY_USERNAME --password-stdin
             export IMAGE_REGISTRY=$REGISTRY_URL
             echo "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
             echo ${AZ_K8S_VERSI}
-            echo ${AZ_K8S_VERSION}
             echo "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
           displayName: make and push ccm image
           env:
+            REGISTRY_USERNAME: $(registry.username)
+            REGISTRY_PASSWORD: $(registry.password)
             AZ_K8S_VERSI:  "1.23.0"
