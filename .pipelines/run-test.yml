@@ -42,3 +42,4 @@ stages:
           displayName: make and push ccm image
           env:
             AZ_K8S_VERSI:  "1.23.0"
+            
