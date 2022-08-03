@@ -19,10 +19,10 @@ pool:
   vmImage: ubuntu-18.04
 
 variables:
-- group: aks-ci-test
+- group: aks-ci
 - name: DisableDockerDetector
   value: true
-- name: k8s_versio
+- name: k8sVersion
   value: "1.23.0"
 
 stages:
@@ -34,12 +34,9 @@ stages:
       steps:
         - bash: |
             echo "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-            echo $AZ_K8S_VERSI
-            echo $AZ_K8S_VERSION
-            echo $K8S_VER_NEW
-            echo $K8S_VER_SEC
+            echo $K8S_VERSION
             echo "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
           displayName: make and push ccm image
           env:
-            AZ_K8S_VERSI:  "1.23.0"
+            K8S_VERSION: $(k8sVersion)
             
