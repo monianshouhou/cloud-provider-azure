@@ -1,5 +1,5 @@
 schedules:
-- cron: "0 10 * * *"
+- cron: "0 3 * * *"
   displayName: Daily GC
   branches:
     include:
@@ -7,7 +7,7 @@ schedules:
 
 trigger: 
   branches:
-    include:
+    exclude:
     - '*'
 
 pr:
