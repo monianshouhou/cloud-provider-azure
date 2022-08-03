@@ -35,4 +35,5 @@ stages:
           displayName: make and push ccm image
           env:
             K8S_VERSION: $(k8sVersion)
+        - template: test.yml
             
