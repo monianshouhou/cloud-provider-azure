@@ -32,7 +32,11 @@ get_random_location() {
 }
 
 cleanup() {
-  kubectl get node -owide
+  if [[ -n ${KUBECONFIG:-} ]]; then
+      kubectl get node -owide || echo "Unable to get nodes"
+      kubectl get pod -A -owide || echo "Unable to get pods"
+      ${REPO_ROOT}/.pipelines/scripts/collect-log.sh
+  fi
   echo "gc the aks cluster"
   az group delete --resource-group "${RESOURCE_GROUP}" -y --no-wait
 }
@@ -94,6 +98,6 @@ fi
 
 export E2E_ON_AKS_CLUSTER=true
 if [[ "${CLUSTER_TYPE}" =~ "autoscaling" ]]; then
-  export LABEL_FILTER="Feature:Autoscaling"
+  export LABEL_FILTER="Feature:Autoscaling || !Serial && !Slow"
 fi
-make test-ccm-e2e
+# make test-ccm-e2e
