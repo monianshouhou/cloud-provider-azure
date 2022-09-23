@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/utils/strings/slices"
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
 	"sigs.k8s.io/cloud-provider-azure/tests/e2e/utils"
@@ -258,25 +259,27 @@ var _ = Describe("Service with annotation", Label(utils.TestSuiteLabelServiceAnn
 		Expect(*idleTimeout).To(Equal(int32(5)))
 	})
 
-	// It("should support service annotation 'ServiceAnnotationLoadBalancerMixedProtocols'", func() {
-	// 	annotation := map[string]string{
-	// 		azureprovider.ServiceAnnotationLoadBalancerMixedProtocols: "true",
-	// 	}
+	It("should support service annotation 'service.beta.kubernetes.io/azure-load-balancer-enable-high-availability-ports'", func() {
+		if !strings.EqualFold(os.Getenv(utils.LoadBalancerSkuEnv), string(network.PublicIPAddressSkuNameStandard)) {
+			Skip("azure-load-balancer-enable-high-availability-ports only work with Standard Load Balancer")
+		}
 
-	// 	// create service with given annotation and wait it to expose
-	// 	publicIP := createAndExposeDefaultServiceWithAnnotation(cs, serviceName, ns.Name, labels, annotation, ports)
+		annotation := map[string]string{
+			consts.ServiceAnnotationLoadBalancerEnableHighAvailabilityPorts: "true",
+			consts.ServiceAnnotationLoadBalancerInternal:                    "true",
+		}
 
-	// 	// get lb from azure client
-	// 	lb := getAzureLoadBalancer(publicIP)
+		// create service with given annotation and wait it to expose
+		ip := createAndExposeDefaultServiceWithAnnotation(cs, serviceName, ns.Name, labels, annotation, ports)
 
-	// 	existingProtocols := make(map[network.TransportProtocol]int)
-	// 	for _, rule := range *lb.LoadBalancingRules {
-	// 		if _, ok := existingProtocols[rule.Protocol]; !ok {
-	// 			existingProtocols[rule.Protocol]++
-	// 		}
-	// 	}
-	// 	Expect(len(existingProtocols)).To(Equal(2))
-	// })
+		// get lb from azure client
+		lb := getAzureLoadBalancerFromInternalIP(tc, ip, tc.GetResourceGroup(), "")
+
+		Expect(len(*lb.LoadBalancingRules)).To(Equal(1))
+		rule := (*lb.LoadBalancingRules)[0]
+		Expect(*rule.FrontendPort).To(Equal(int32(0)))
+		Expect(*rule.BackendPort).To(Equal(int32(0)))
+	})
 
 	It("should support service annotation 'service.beta.kubernetes.io/azure-load-balancer-resource-group'", func() {
 		By("creating a test resource group")
@@ -341,6 +344,72 @@ var _ = Describe("Service with annotation", Label(utils.TestSuiteLabelServiceAnn
 
 		ipList := []string{ip1, ip2}
 		Expect(validateSharedSecurityRuleExists(nsgs, ipList, port)).To(BeTrue(), "Security rule for service %s not exists", serviceName)
+	})
+
+	It("should support service annotation `service.beta.kubernetes.io/azure-additional-public-ips`", func() {
+		By("creating a public IP")
+		ipName := basename + "-public-IP" + string(uuid.NewUUID())[0:4]
+		pip := defaultPublicIPAddress(ipName)
+		pip, err := utils.WaitCreatePIP(tc, ipName, tc.GetResourceGroup(), pip)
+		Expect(err).NotTo(HaveOccurred())
+		additionalPIP := to.String(pip.IPAddress)
+		utils.Logf("created pip with address %s", additionalPIP)
+
+		By("Exposing service with additional pip")
+		annotation := map[string]string{
+			consts.ServiceAnnotationAdditionalPublicIPs: additionalPIP,
+		}
+		_ = createAndExposeDefaultServiceWithAnnotation(cs, serviceName, ns.Name, labels, annotation, ports)
+		defer func() {
+			err := utils.DeleteServiceIfExists(cs, ns.Name, serviceName)
+			Expect(err).NotTo(HaveOccurred())
+		}()
+
+		err = wait.PollImmediate(10*time.Second, 2*time.Minute, func() (bool, error) {
+			service, err := cs.CoreV1().Services(ns.Name).Get(context.TODO(), serviceName, metav1.GetOptions{})
+			if err != nil {
+				if utils.IsRetryableAPIError(err) {
+					return false, nil
+				}
+				return false, err
+			}
+
+			utils.Logf("Checking additionalPIP in ingress")
+			foundInIngress := false
+			ingressList := service.Status.LoadBalancer.Ingress
+			for _, ingress := range ingressList {
+				if additionalPIP == ingress.IP {
+					foundInIngress = true
+					break
+				}
+			}
+
+			utils.Logf("Checking additionalPIP in nsg")
+			foundInNsg := true
+			nsgs, err := tc.GetClusterSecurityGroups()
+			if err != nil {
+				return false, err
+			}
+			for _, nsg := range nsgs {
+				if !strings.Contains(*nsg.Name, "node") {
+					continue
+				}
+				if *nsg.SecurityRules == nil || len(*nsg.SecurityRules) < 1 {
+					continue
+				}
+				destinationAdressPrefixes := (*nsg.SecurityRules)[0].DestinationAddressPrefixes
+				if destinationAdressPrefixes == nil || !slices.Contains(*destinationAdressPrefixes, additionalPIP) {
+					foundInNsg = false
+					break
+				}
+			}
+			return foundInIngress && foundInNsg, nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("cleaning up")
+		err = utils.DeletePIPWithRetry(tc, ipName, "")
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("should support service annotation `service.beta.kubernetes.io/azure-pip-tags`", func() {
@@ -524,6 +593,41 @@ var _ = Describe("Service with annotation", Label(utils.TestSuiteLabelServiceAnn
 		}
 	})
 
+	It("should support service annotation 'service.beta.kubernetes.io/azure-load-balancer-health-probe-interval' and port specific configs", func() {
+		By("Creating a service with health probe annotations")
+		annotation := map[string]string{
+			consts.ServiceAnnotationLoadBalancerHealthProbeInterval:                                        "15",
+			consts.BuildHealthProbeAnnotationKeyForPort(serverPort, consts.HealthProbeParamsProbeInterval): "10",
+		}
+
+		// create service with given annotation and wait it to expose
+		publicIP := createAndExposeDefaultServiceWithAnnotation(cs, serviceName, ns.Name, labels, annotation, ports)
+		defer func() {
+			By("Cleaning up service and public IP")
+			err := utils.DeleteService(cs, ns.Name, serviceName)
+			Expect(err).NotTo(HaveOccurred())
+			err = utils.DeletePIPWithRetry(tc, publicIP, tc.GetResourceGroup())
+			Expect(err).NotTo(HaveOccurred())
+		}()
+
+		var lb *network.LoadBalancer
+		//wait for backend update
+		err := wait.PollImmediate(5*time.Second, 60*time.Second, func() (bool, error) {
+			lb = getAzureLoadBalancerFromPIP(tc, publicIP, tc.GetResourceGroup(), "")
+			return len(*lb.LoadBalancerPropertiesFormat.Probes) == 1, nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Validating health probe config IntervalInSeconds")
+		var intervalInSeconds *int32
+		for _, probe := range *lb.Probes {
+			if probe.IntervalInSeconds != nil {
+				intervalInSeconds = probe.IntervalInSeconds
+			}
+		}
+		Expect(*intervalInSeconds).To(Equal(int32(10)))
+	})
+
 	It("should support service annotation 'service.beta.kubernetes.io/azure-load-balancer-health-probe-num-of-probe' and port specific configs", func() {
 		By("Creating a service with health probe annotations")
 		annotation := map[string]string{
@@ -540,24 +644,40 @@ var _ = Describe("Service with annotation", Label(utils.TestSuiteLabelServiceAnn
 			err = utils.DeletePIPWithRetry(tc, publicIP, tc.GetResourceGroup())
 			Expect(err).NotTo(HaveOccurred())
 		}()
+		pipFrontendConfigID := getPIPFrontendConfigurationID(tc, publicIP, tc.GetResourceGroup(), "")
+		pipFrontendConfigIDSplit := strings.Split(pipFrontendConfigID, "/")
+		Expect(len(pipFrontendConfigIDSplit)).NotTo(Equal(0))
 
 		var lb *network.LoadBalancer
+		var targetProbes []*network.Probe
 		//wait for backend update
 		err := wait.PollImmediate(5*time.Second, 60*time.Second, func() (bool, error) {
 			lb = getAzureLoadBalancerFromPIP(tc, publicIP, tc.GetResourceGroup(), "")
-			return len(*lb.LoadBalancerPropertiesFormat.Probes) == 1, nil
+			targetProbes = []*network.Probe{}
+			for i := range *lb.LoadBalancerPropertiesFormat.Probes {
+				probe := (*lb.LoadBalancerPropertiesFormat.Probes)[i]
+				utils.Logf("One probe of LB is %q", *probe.Name)
+				probeSplit := strings.Split(*probe.Name, "-")
+				Expect(len(probeSplit)).NotTo(Equal(0))
+				if pipFrontendConfigIDSplit[len(pipFrontendConfigIDSplit)-1] == probeSplit[0] {
+					targetProbes = append(targetProbes, &probe)
+				}
+			}
+
+			return len(targetProbes) == 1, nil
 		})
 		Expect(err).NotTo(HaveOccurred())
 
-		By("Validating health probe configs")
+		By("Validating health probe config NumOfProves")
 		var numberOfProbes *int32
-		for _, probe := range *lb.Probes {
+		for _, probe := range targetProbes {
 			if probe.NumberOfProbes != nil {
 				numberOfProbes = probe.NumberOfProbes
 			}
 		}
 		Expect(*numberOfProbes).To(Equal(int32(3)))
 	})
+
 	It("should support service annotation 'service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol' and port specific configs", func() {
 		By("Creating a service with health probe annotations")
 		annotation := map[string]string{
@@ -574,19 +694,32 @@ var _ = Describe("Service with annotation", Label(utils.TestSuiteLabelServiceAnn
 			err = utils.DeletePIPWithRetry(tc, publicIP, tc.GetResourceGroup())
 			Expect(err).NotTo(HaveOccurred())
 		}()
+		pipFrontendConfigID := getPIPFrontendConfigurationID(tc, publicIP, tc.GetResourceGroup(), "")
+		pipFrontendConfigIDSplit := strings.Split(pipFrontendConfigID, "/")
+		Expect(len(pipFrontendConfigIDSplit)).NotTo(Equal(0))
 
 		var lb *network.LoadBalancer
+		var targetProbes []*network.Probe
 		//wait for backend update
 		err := wait.PollImmediate(5*time.Second, 60*time.Second, func() (bool, error) {
 			lb = getAzureLoadBalancerFromPIP(tc, publicIP, tc.GetResourceGroup(), "")
-			return len(*lb.LoadBalancerPropertiesFormat.Probes) == 1, nil
+			targetProbes = []*network.Probe{}
+			for i := range *lb.LoadBalancerPropertiesFormat.Probes {
+				probe := (*lb.LoadBalancerPropertiesFormat.Probes)[i]
+				utils.Logf("One probe of LB is %q", *probe.Name)
+				probeSplit := strings.Split(*probe.Name, "-")
+				Expect(len(probeSplit)).NotTo(Equal(0))
+				if pipFrontendConfigIDSplit[len(pipFrontendConfigIDSplit)-1] == probeSplit[0] {
+					targetProbes = append(targetProbes, &probe)
+				}
+			}
+			return len(targetProbes) == 1, nil
 		})
 		Expect(err).NotTo(HaveOccurred())
 		// get lb from azure client
 		By("Validating health probe configs")
-		probes := *lb.Probes
-		Expect((len(probes))).To(Equal(1))
-		Expect(probes[0].Protocol).To(Equal(network.ProbeProtocolHTTP))
+		Expect((len(targetProbes))).To(Equal(1))
+		Expect(targetProbes[0].Protocol).To(Equal(network.ProbeProtocolHTTP))
 	})
 })
 
@@ -638,7 +771,7 @@ var _ = Describe("Multiple VMSS", Label(utils.TestSuiteLabelMultiNodePools, util
 		tc = nil
 	})
 
-	It("should support service annotation `service.beta.kubernetes.io/azure-load-balancer-mode`", func() {
+	It("should support service annotation `service.beta.kubernetes.io/azure-load-balancer-mode`", Label(utils.TestSuiteLabelSerial, utils.TestSuiteLabelSlow, utils.TestSuiteLabelCloudConfig), func() {
 		//get nodelist and providerID specific to an agentnodes
 		By("Getting agent nodes list")
 		nodes, err := utils.GetAgentNodes(cs)
@@ -655,7 +788,7 @@ var _ = Describe("Multiple VMSS", Label(utils.TestSuiteLabelMultiNodePools, util
 			providerID := node.Spec.ProviderID
 			matches := scalesetRE.FindStringSubmatch(providerID)
 			if len(matches) != 3 {
-				Skip("azure-load-balancer-mode tests only works for vmss cluster")
+				continue
 			}
 			resourceGroupName = matches[1]
 			vmssNames.Insert(matches[2])
@@ -668,10 +801,79 @@ var _ = Describe("Multiple VMSS", Label(utils.TestSuiteLabelMultiNodePools, util
 			Skip("azure-load-balancer-mode tests only works for cluster with multiple vmss agent pools")
 		}
 
-		vmssList := vmssNames.List()[:2]
-		for _, vmss := range vmssList {
-			validateLoadBalancerBackendPools(tc, vmss, cs, serviceName, labels, ns.Name, ports, resourceGroupName)
+		if strings.EqualFold(os.Getenv(utils.LoadBalancerSkuEnv), string(network.PublicIPAddressSkuNameStandard)) {
+			if strings.EqualFold(os.Getenv(utils.CloudConfigFromSecret), "true") {
+				By("Updating EnableMultipleStandardLoadBalancers to true in cloud config")
+				config, err := utils.GetConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey)
+				Expect(err).NotTo(HaveOccurred())
+				config.EnableMultipleStandardLoadBalancers = true
+				err = utils.UpdateConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey, config)
+				Expect(err).NotTo(HaveOccurred())
+
+				defer func() {
+					By("Cleaning up EnableMultipleStandardLoadBalancers in cloud config secret")
+					config, err := utils.GetConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey)
+					Expect(err).NotTo(HaveOccurred())
+					config.EnableMultipleStandardLoadBalancers = false
+					err = utils.UpdateConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey, config)
+					Expect(err).NotTo(HaveOccurred())
+				}()
+			} else {
+				Skip("azure-load-balancer-mode only works for standard lb when EnableMultipleStandardLoadBalancers is true")
+			}
 		}
+
+		utils.Logf("Updating deployment %s", serviceName)
+		tcpPort := int32(serverPort)
+		udpPort := int32(testingPort)
+		deployment := createDeploymentManifest(serviceName, labels, &tcpPort, &udpPort)
+		_, err = cs.AppsV1().Deployments(ns.Name).Update(context.TODO(), deployment, metav1.UpdateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		vmssList := vmssNames.List()[:2]
+		// Make sure that the lb of first vmss has minimal rules
+		// This helps test the auto value for this annotation
+		ports2 := []v1.ServicePort{
+			{
+				Name:       "tcp",
+				Port:       serverPort,
+				TargetPort: intstr.FromInt(serverPort),
+				Protocol:   v1.ProtocolTCP,
+			},
+			{
+				Name:       "udp",
+				Port:       testingPort,
+				TargetPort: intstr.FromInt(testingPort),
+				Protocol:   v1.ProtocolUDP,
+			},
+		}
+		for i, vmss := range vmssList {
+			if i == 0 {
+				validateLoadBalancerBackendPools(tc, vmss, cs, serviceName, labels, ns.Name, ports, resourceGroupName)
+			} else {
+				validateLoadBalancerBackendPools(tc, vmss, cs, serviceName, labels, ns.Name, ports2, resourceGroupName)
+			}
+		}
+
+		// Test auto value for service.beta.kubernetes.io/azure-load-balancer-mode annotation
+		// create annotation with auto value for LoadBalancer service
+		By("Creating service " + serviceName + " in namespace " + ns.Name)
+		annotation := map[string]string{
+			consts.ServiceAnnotationLoadBalancerMode: consts.ServiceAnnotationLoadBalancerAutoModeValue,
+		}
+		service := utils.CreateLoadBalancerServiceManifest(serviceName, annotation, labels, ns.Name, ports)
+		_, err = cs.CoreV1().Services(ns.Name).Create(context.TODO(), service, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		utils.Logf("Successfully created LoadBalancer service " + serviceName + " in namespace " + ns.Name)
+
+		//wait and get service's public IP Address
+		By("Waiting for service exposure")
+		publicIP, err := utils.WaitServiceExposureAndValidateConnectivity(cs, ns.Name, serviceName, "")
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Checking if lbName of service with auto mode annotation equals " + vmssList[0])
+		lb := getAzureLoadBalancerFromPIP(tc, publicIP, resourceGroupName, "")
+		Expect(*lb.Name).To(Equal(vmssList[0]))
 	})
 })
 
@@ -830,17 +1032,45 @@ var _ = Describe("Multi-ports service", Label(utils.TestSuiteLabelMultiPorts), f
 			Expect(retryErr).NotTo(HaveOccurred())
 			utils.Logf("Successfully updated LoadBalancer service " + serviceName + " in namespace " + ns.Name)
 
+			pipFrontendConfigID := getPIPFrontendConfigurationID(tc, publicIP, tc.GetResourceGroup(), "")
+			pipFrontendConfigIDSplit := strings.Split(pipFrontendConfigID, "/")
+			Expect(len(pipFrontendConfigIDSplit)).NotTo(Equal(0))
+
 			//wait for backend update
+			var targetProbes []*network.Probe
 			err = wait.PollImmediate(5*time.Second, 2*time.Minute, func() (bool, error) {
 				lb := getAzureLoadBalancerFromPIP(tc, publicIP, tc.GetResourceGroup(), "")
-				return len(*lb.LoadBalancerPropertiesFormat.Probes) == 2 &&
-					*(*lb.LoadBalancerPropertiesFormat.Probes)[0].Port != nodeHealthCheckPort &&
-					*(*lb.LoadBalancerPropertiesFormat.Probes)[1].Port != nodeHealthCheckPort, nil
+				targetProbes = []*network.Probe{}
+				for i := range *lb.LoadBalancerPropertiesFormat.Probes {
+					probe := (*lb.LoadBalancerPropertiesFormat.Probes)[i]
+					utils.Logf("One probe of LB is %q", *probe.Name)
+					probeSplit := strings.Split(*probe.Name, "-")
+					Expect(len(probeSplit)).NotTo(Equal(0))
+					if pipFrontendConfigIDSplit[len(pipFrontendConfigIDSplit)-1] == probeSplit[0] {
+						targetProbes = append(targetProbes, &probe)
+					}
+				}
+				return len(targetProbes) == 2 &&
+					*(targetProbes)[0].Port != nodeHealthCheckPort &&
+					*(targetProbes)[1].Port != nodeHealthCheckPort, nil
 			})
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 })
+
+func compareTags(tags, expectedTags map[string]*string) bool {
+	printTags := func(name string, ts map[string]*string) {
+		msg := ""
+		for t := range ts {
+			msg += fmt.Sprintf("%s:%s ", t, *ts[t])
+		}
+		utils.Logf("%s: [%s]", name, msg)
+	}
+	printTags("tags", tags)
+	printTags("expectedTags", expectedTags)
+	return reflect.DeepEqual(tags, expectedTags)
+}
 
 func waitComparePIPTags(tc *utils.AzureTestClient, expectedTags map[string]*string, pipName string) error {
 	err := wait.PollImmediate(10*time.Second, 10*time.Minute, func() (done bool, err error) {
@@ -854,21 +1084,12 @@ func waitComparePIPTags(tc *utils.AzureTestClient, expectedTags map[string]*stri
 		delete(tags, consts.ServiceTagKey)
 		delete(tags, consts.LegacyServiceTagKey)
 
-		printTags := func(name string, ts map[string]*string) {
-			msg := ""
-			for t := range ts {
-				msg += fmt.Sprintf("%s:%s ", t, *ts[t])
-			}
-			utils.Logf("%s: [%s]", name, msg)
-		}
-		printTags("tags", tags)
-		printTags("expectedTags", expectedTags)
-		return reflect.DeepEqual(tags, expectedTags), nil
+		return compareTags(tags, expectedTags), nil
 	})
 	return err
 }
 
-func getAzureLoadBalancerFromPIP(tc *utils.AzureTestClient, pip, pipResourceGroup, lbResourceGroup string) *network.LoadBalancer {
+func getPIPFrontendConfigurationID(tc *utils.AzureTestClient, pip, pipResourceGroup, lbResourceGroup string) string {
 	utils.Logf("Getting public IPs in the resourceGroup " + pipResourceGroup)
 	pipList, err := tc.ListPublicIPs(pipResourceGroup)
 	Expect(err).NotTo(HaveOccurred())
@@ -885,8 +1106,41 @@ func getAzureLoadBalancerFromPIP(tc *utils.AzureTestClient, pip, pipResourceGrou
 			break
 		}
 	}
-	Expect(pipFrontendConfigurationID).NotTo(Equal(""))
 	utils.Logf("Successfully obtained PIP front config id: %v", pipFrontendConfigurationID)
+	return pipFrontendConfigurationID
+}
+
+func getAzureLoadBalancerFromInternalIP(tc *utils.AzureTestClient, ip, pipResourceGroup, lbResourceGroup string) *network.LoadBalancer {
+	if lbResourceGroup == "" {
+		lbResourceGroup = tc.GetResourceGroup()
+	}
+	utils.Logf("Getting load balancers in the resourceGroup " + lbResourceGroup)
+	lbList, err := tc.ListLoadBalancers(lbResourceGroup)
+	Expect(err).NotTo(HaveOccurred())
+
+	utils.Logf("Looking for internal load balancer frontend config ID with private ip as frontend")
+	var loadBalancer network.LoadBalancer
+	var found bool
+	for _, lb := range lbList {
+		for _, fipconfig := range *lb.FrontendIPConfigurations {
+			if fipconfig.PrivateIPAddress != nil && *fipconfig.PrivateIPAddress == ip {
+				loadBalancer = lb
+				found = true
+				break
+			}
+		}
+		if found {
+			break
+		}
+	}
+	Expect(loadBalancer).NotTo(BeNil())
+	return &loadBalancer
+
+}
+
+func getAzureLoadBalancerFromPIP(tc *utils.AzureTestClient, pip, pipResourceGroup, lbResourceGroup string) *network.LoadBalancer {
+	pipFrontendConfigurationID := getPIPFrontendConfigurationID(tc, pip, pipResourceGroup, lbResourceGroup)
+	Expect(pipFrontendConfigurationID).NotTo(Equal(""))
 
 	utils.Logf("Getting loadBalancer name from pipFrontendConfigurationID")
 	match := lbNameRE.FindStringSubmatch(pipFrontendConfigurationID)
@@ -1027,10 +1281,6 @@ func validateLoadBalancerBackendPools(tc *utils.AzureTestClient, vmssName string
 	Expect(err).NotTo(HaveOccurred())
 	Expect(lb.BackendAddressPools).NotTo(BeNil())
 	Expect(lb.LoadBalancingRules).NotTo(BeNil())
-
-	if lb.Sku != nil && lb.Sku.Name == network.LoadBalancerSkuNameStandard {
-		Skip("azure-load-balancer-mode is not working for standard load balancer")
-	}
 
 	By("Getting loadBalancer backendPoolID")
 	backendPoolID := ""

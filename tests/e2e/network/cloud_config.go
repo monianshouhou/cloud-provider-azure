@@ -1,0 +1,245 @@
+/*
+Copyright 2022 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package network
+
+import (
+	"context"
+	"os"
+	"strings"
+	"time"
+
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/wait"
+	clientset "k8s.io/client-go/kubernetes"
+
+	"sigs.k8s.io/cloud-provider-azure/tests/e2e/utils"
+
+	"github.com/Azure/go-autorest/autorest/to"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+const (
+	cloudConfigNamespace = "kube-system"
+	cloudConfigName      = "azure-cloud-provider"
+	cloudConfigKey       = "cloud-config"
+)
+
+var _ = Describe("Cloud Config", Label(utils.TestSuiteLabelCloudConfig), func() {
+	basename := "cloudconfig-service"
+	serviceName := "cloudconfig-test"
+
+	var (
+		cs clientset.Interface
+		ns *v1.Namespace
+		tc *utils.AzureTestClient
+	)
+
+	labels := map[string]string{
+		"app": serviceName,
+	}
+	ports := []v1.ServicePort{{
+		Port:       serverPort,
+		TargetPort: intstr.FromInt(serverPort),
+	}}
+
+	BeforeEach(func() {
+		if !strings.EqualFold(os.Getenv(utils.CloudConfigFromSecret), "true") {
+			Skip("Testing cloud config needs reading config from secret")
+		}
+		var err error
+		cs, err = utils.CreateKubeClientSet()
+		Expect(err).NotTo(HaveOccurred())
+
+		ns, err = utils.CreateTestingNamespace(basename, cs)
+		Expect(err).NotTo(HaveOccurred())
+
+		utils.Logf("Creating Azure clients")
+		tc, err = utils.CreateAzureTestClient()
+		Expect(err).NotTo(HaveOccurred())
+
+		utils.Logf("Creating deployment " + serviceName)
+		deployment := createServerDeploymentManifest(serviceName, labels)
+		_, err = cs.AppsV1().Deployments(ns.Name).Create(context.TODO(), deployment, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		utils.Logf("Waiting for backend pods to be ready")
+		err = utils.WaitPodsToBeReady(cs, ns.Name)
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	AfterEach(func() {
+		err := cs.AppsV1().Deployments(ns.Name).Delete(context.TODO(), serviceName, metav1.DeleteOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		err = utils.DeleteNamespace(cs, ns.Name)
+		Expect(err).NotTo(HaveOccurred())
+
+		cs = nil
+		ns = nil
+		tc = nil
+	})
+
+	It("should support cloud config `Tags`, `SystemTags` and `TagsMap`", Label(utils.TestSuiteLabelSerial), func() {
+		By("Updating Tags and TagsMap in Cloudconfig")
+		config, err := utils.GetConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey)
+		Expect(err).NotTo(HaveOccurred())
+		// Make sure no other existing tags
+		config.SystemTags = "a, c, e, m, g=h"
+		config.Tags = "a=b,c= d,e =, =f"
+		config.TagsMap = map[string]string{"m": "n", "g=h": "i,j"}
+		err = utils.UpdateConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey, config)
+		Expect(err).NotTo(HaveOccurred())
+
+		defer func() {
+			By("Cleaning up Tags, SystemTags and TagsMap in cloud config secret")
+			config, err := utils.GetConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey)
+			Expect(err).NotTo(HaveOccurred())
+			config.Tags = ""
+			config.SystemTags = ""
+			config.TagsMap = map[string]string{}
+			err = utils.UpdateConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey, config)
+			Expect(err).NotTo(HaveOccurred())
+		}()
+
+		By("Creating a service")
+		service := utils.CreateLoadBalancerServiceManifest(serviceName, nil, labels, ns.Name, ports)
+		_, err = cs.CoreV1().Services(ns.Name).Create(context.TODO(), service, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Waiting service to expose...")
+		ip, err := utils.WaitServiceExposureAndValidateConnectivity(cs, ns.Name, serviceName, "")
+		Expect(err).NotTo(HaveOccurred())
+
+		defer func() {
+			By("Cleaning up test service")
+			err := utils.DeleteServiceIfExists(cs, ns.Name, serviceName)
+			Expect(err).NotTo(HaveOccurred())
+		}()
+
+		expectedTags := map[string]*string{
+			"a":   to.StringPtr("b"),
+			"c":   to.StringPtr("d"),
+			"e":   to.StringPtr(""),
+			"m":   to.StringPtr("n"),
+			"g=h": to.StringPtr("i,j"),
+		}
+
+		By("Checking tags on the loadbalancer")
+		err = waitCompareLBTags(tc, expectedTags, ip)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Checking tags of security group")
+		err = waitCompareNsgTags(tc, expectedTags)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Checking tags of route tables")
+		err = waitCompareRouteTableTags(tc, expectedTags)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Updating SystemTags in Cloudconfig")
+		config, err = utils.GetConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey)
+		Expect(err).NotTo(HaveOccurred())
+		config.SystemTags = "a"
+		config.Tags = "u=w"
+		config.TagsMap = map[string]string{}
+		err = utils.UpdateConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey, config)
+		Expect(err).NotTo(HaveOccurred())
+
+		expectedTags = map[string]*string{
+			"a": to.StringPtr("b"),
+			"u": to.StringPtr("w"),
+		}
+
+		By("Checking tags on the loadbalancer")
+		err = waitCompareLBTags(tc, expectedTags, ip)
+		Expect(err).NotTo(HaveOccurred())
+	})
+})
+
+// func getControlPlaneNsg(nsgs []aznetwork.SecurityGroup) *aznetwork.SecurityGroup {
+// 	var controlPlaneNsg *aznetwork.SecurityGroup
+// 	for _, nsg := range nsgs {
+// 		if strings.Contains(*nsg.Name, "controlplane") {
+// 			controlPlaneNsg = &nsg
+// 			break
+// 		}
+// 	}
+// 	Expect(controlPlaneNsg).NotTo(BeNil())
+// 	return controlPlaneNsg
+// }
+
+func waitCompareLBTags(tc *utils.AzureTestClient, expectedTags map[string]*string, ip string) error {
+	err := wait.PollImmediate(10*time.Second, 2*time.Minute, func() (done bool, err error) {
+		lb := getAzureLoadBalancerFromPIP(tc, ip, tc.GetResourceGroup(), "")
+		return compareTags(lb.Tags, expectedTags), nil
+	})
+	return err
+}
+
+func waitCompareRouteTableTags(tc *utils.AzureTestClient, expectedTags map[string]*string) error {
+	err := wait.PollImmediate(10*time.Second, 2*time.Minute, func() (done bool, err error) {
+		routeTables, err := utils.ListRouteTables(tc)
+		if err != nil {
+			return false, err
+		}
+
+		rightTagFlag := true
+		for _, routeTable := range *routeTables {
+			utils.Logf("Checking tags for route table: " + *routeTable.Name)
+			if !compareTags(routeTable.Tags, expectedTags) {
+				rightTagFlag = false
+				break
+			}
+		}
+		return rightTagFlag, nil
+	})
+	return err
+}
+
+func waitCompareNsgTags(tc *utils.AzureTestClient, expectedTags map[string]*string) error {
+	err := wait.PollImmediate(10*time.Second, 2*time.Minute, func() (done bool, err error) {
+		nsgs, err := tc.GetClusterSecurityGroups()
+		if err != nil {
+			return false, err
+		}
+		// toDeleteTags := getControlPlaneNsg(nsgs).Tags
+		// if toDeleteTags == nil {
+		// 	return false, fmt.Errorf("tags of controlplane nsg should not be nil")
+		// }
+
+		rightTagFlag := true
+		for _, nsg := range nsgs {
+			if !strings.Contains(*nsg.Name, "node") {
+				continue
+			}
+			utils.Logf("Checking tags for nsg: " + *nsg.Name)
+			tags := nsg.Tags
+			// for toDeleteTag, _ := range toDeleteTags {
+			// 	delete(tags, toDeleteTag)
+			// }
+			if !compareTags(tags, expectedTags) {
+				rightTagFlag = false
+				break
+			}
+		}
+		return rightTagFlag, nil
+	})
+	return err
+}

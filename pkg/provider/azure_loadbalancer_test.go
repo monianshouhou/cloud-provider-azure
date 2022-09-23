@@ -594,7 +594,7 @@ func TestEnsureLoadBalancerDeleted(t *testing.T) {
 	mockLBBackendPool := az.LoadBalancerBackendPool.(*MockBackendPool)
 	mockLBBackendPool.EXPECT().ReconcileBackendPools(gomock.Any(), gomock.Any(), gomock.Any()).Return(false, false, nil).AnyTimes()
 	mockLBBackendPool.EXPECT().EnsureHostsInPool(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-	mockLBBackendPool.EXPECT().GetBackendPrivateIPs(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockLBBackendPool.EXPECT().GetBackendPrivateIPs(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 
 	clusterResources, expectedInterfaces, expectedVirtualMachines := getClusterResources(az, vmCount, availabilitySetCount)
 	setMockEnv(az, ctrl, expectedInterfaces, expectedVirtualMachines, 4)
@@ -920,7 +920,7 @@ func TestShouldReleaseExistingOwnedPublicIP(t *testing.T) {
 			expectedShouldRelease: false,
 		},
 		{
-			desc:           "existing public ip with no format properties (unit test only?), tags required by annotation, no release",
+			desc:           "existing public ip with no format properties (unit test only?), tags required by annotation, expect release",
 			existingPip:    existingPipWithNoPublicIPAddressFormatProperties,
 			lbShouldExist:  true,
 			lbIsInternal:   false,
@@ -2028,7 +2028,7 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules shall return corresponding probe and lbRule (slb with IPv6)",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/azure-load-balancer-internal": "true",
+				consts.ServiceAnnotationLoadBalancerInternal: "true",
 			}, true, 80),
 			loadBalancerSku: "standard",
 			expectedProbes:  getDefaultTestProbes("Tcp", ""),
@@ -2037,8 +2037,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules shall return corresponding probe and lbRule (slb with HA enabled)",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/azure-load-balancer-enable-high-availability-ports": "true",
-				"service.beta.kubernetes.io/azure-load-balancer-internal":                       "true",
+				consts.ServiceAnnotationLoadBalancerEnableHighAvailabilityPorts: "true",
+				consts.ServiceAnnotationLoadBalancerInternal:                    "true",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			expectedProbes:  getDefaultTestProbes("Tcp", ""),
@@ -2047,8 +2047,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules shall return corresponding probe and lbRule (slb with HA mode and SCTP)",
 			service: getTestService("test1", v1.ProtocolSCTP, map[string]string{
-				"service.beta.kubernetes.io/azure-load-balancer-enable-high-availability-ports": "true",
-				"service.beta.kubernetes.io/azure-load-balancer-internal":                       "true",
+				consts.ServiceAnnotationLoadBalancerEnableHighAvailabilityPorts: "true",
+				consts.ServiceAnnotationLoadBalancerInternal:                    "true",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			expectedRules:   getHATestRules(true, false, v1.ProtocolSCTP),
@@ -2056,8 +2056,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules shall return corresponding probe and lbRule (slb with HA enabled multi-ports services)",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/azure-load-balancer-enable-high-availability-ports": "true",
-				"service.beta.kubernetes.io/azure-load-balancer-internal":                       "true",
+				consts.ServiceAnnotationLoadBalancerEnableHighAvailabilityPorts: "true",
+				consts.ServiceAnnotationLoadBalancerInternal:                    "true",
 			}, false, 80, 8080),
 			loadBalancerSku: "standard",
 			expectedProbes:  getDefaultTestProbes("Tcp", ""),
@@ -2074,7 +2074,7 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return tcp probe when invalid protocol is defined",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_request-path": "/healthy1",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsRequestPath): "/healthy1",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "TCP1",
@@ -2084,7 +2084,7 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return tcp probe when invalid protocol is defined",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_request-path": "/healthy1",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsRequestPath): "/healthy1",
 			}, false, 80),
 			loadBalancerSku: "basic",
 			probeProtocol:   "TCP1",
@@ -2094,8 +2094,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return correct rule when deprecated annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path": "/healthy1",
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol":     "https",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsRequestPath): "/healthy1",
+				consts.ServiceAnnotationLoadBalancerHealthProbeProtocol:                              "https",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			expectedProbes:  getDefaultTestProbes("Https", "/healthy1"),
@@ -2104,8 +2104,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return correct rule when deprecated annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path": "/healthy1",
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol":     "http",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsRequestPath): "/healthy1",
+				consts.ServiceAnnotationLoadBalancerHealthProbeProtocol:                              "http",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			expectedProbes:  getDefaultTestProbes("Http", "/healthy1"),
@@ -2114,8 +2114,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return correct rule when deprecated annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path": "/healthy1",
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol":     "tcp",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsRequestPath): "/healthy1",
+				consts.ServiceAnnotationLoadBalancerHealthProbeProtocol:                              "tcp",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			expectedProbes:  getDefaultTestProbes("Tcp", ""),
@@ -2124,7 +2124,7 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return correct rule when deprecated annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path": "/healthy1",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsRequestPath): "/healthy1",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Https",
@@ -2134,8 +2134,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should overwrite value defined in deprecated annotation when deprecated annotations and probe path are defined",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path": "/healthy1",
-				"service.beta.kubernetes.io/port_80_health-probe_request-path":             "/healthy2",
+				consts.ServiceAnnotationLoadBalancerHealthProbeRequestPath:                           "/healthy1",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsRequestPath): "/healthy2",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Https",
@@ -2145,9 +2145,9 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return error when deprecated tcp health probe annotations and protocols are added and config is not valid",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_interval":             "10",
-				"service.beta.kubernetes.io/port_80_health-probe_num-of-probe":         "20",
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol": "https",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "10",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "20",
+				consts.ServiceAnnotationLoadBalancerHealthProbeProtocol:                                "https",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Tcp",
@@ -2156,9 +2156,9 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return error when deprecated tcp health probe annotations and protocols are added and config is not valid",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_interval":             "10",
-				"service.beta.kubernetes.io/port_80_health-probe_num-of-probe":         "20",
-				"service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol": "tcp",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "10",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "20",
+				consts.ServiceAnnotationLoadBalancerHealthProbeProtocol:                                "tcp",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Tcp",
@@ -2167,8 +2167,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return correct rule when health probe annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_interval":     "20",
-				"service.beta.kubernetes.io/port_80_health-probe_num-of-probe": "5",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "20",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "5",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Https",
@@ -2179,8 +2179,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return correct rule when health probe annotations are added,default path should be /healthy",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_interval":     "20",
-				"service.beta.kubernetes.io/port_80_health-probe_num-of-probe": "5",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "20",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "5",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Http",
@@ -2190,8 +2190,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return correct rule when tcp health probe annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_interval":     "20",
-				"service.beta.kubernetes.io/port_80_health-probe_num-of-probe": "5",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "20",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "5",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Tcp",
@@ -2201,8 +2201,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return error when invalid tcp health probe annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_interval":     "20",
-				"service.beta.kubernetes.io/port_80_health-probe_num-of-probe": "5a",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "20",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "5a",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Tcp",
@@ -2211,8 +2211,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return error when invalid tcp health probe annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_interval":     "1",
-				"service.beta.kubernetes.io/port_80_health-probe_num-of-probe": "5",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "1",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "5",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Tcp",
@@ -2221,8 +2221,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return error when invalid tcp health probe annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_interval":     "10",
-				"service.beta.kubernetes.io/port_80_health-probe_num-of-probe": "1",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "10",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "1",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Tcp",
@@ -2231,8 +2231,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		{
 			desc: "getExpectedLBRules should return error when invalid tcp health probe annotations are added",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-				"service.beta.kubernetes.io/port_80_health-probe_interval":     "10",
-				"service.beta.kubernetes.io/port_80_health-probe_num-of-probe": "20",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "10",
+				consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "20",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Tcp",
@@ -2262,9 +2262,9 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 	}{
 		desc: "getExpectedLBRules should expected rules when timeout are added",
 		service: getTestService("test1", v1.ProtocolTCP, map[string]string{
-			"service.beta.kubernetes.io/port_80_health-probe_interval":        "10",
-			"service.beta.kubernetes.io/port_80_health-probe_num-of-probe":    "10",
-			"service.beta.kubernetes.io/azure-load-balancer-tcp-idle-timeout": "5",
+			consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "10",
+			consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "10",
+			consts.ServiceAnnotationLoadBalancerIdleTimeout:                                        "5",
 		}, false, 80),
 		loadBalancerSku: "standard",
 		probeProtocol:   "Tcp",
@@ -2280,8 +2280,8 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 	rules1[1].Probe.ID = to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lbname/probes/atest1-TCP-34567")
 	rules1[2].Probe.ID = to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lbname/probes/atest1-TCP-34567")
 	svc := getTestService("test1", v1.ProtocolTCP, map[string]string{
-		"service.beta.kubernetes.io/port_80_health-probe_interval":     "10",
-		"service.beta.kubernetes.io/port_80_health-probe_num-of-probe": "10",
+		consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsProbeInterval): "10",
+		consts.BuildHealthProbeAnnotationKeyForPort(80, consts.HealthProbeParamsNumOfProbe):    "10",
 	}, false, 80, 443, 421)
 	svc.Spec.ExternalTrafficPolicy = v1.ServiceExternalTrafficPolicyTypeLocal
 	svc.Spec.HealthCheckNodePort = 34567
@@ -3092,6 +3092,7 @@ func TestReconcileSecurityGroup(t *testing.T) {
 	testCases := []struct {
 		desc          string
 		lbIP          *string
+		lbName        *string
 		service       v1.Service
 		existingSgs   map[string]network.SecurityGroup
 		expectedSg    *network.SecurityGroup
@@ -3309,6 +3310,7 @@ func TestReconcileSecurityGroup(t *testing.T) {
 				SecurityGroupPropertiesFormat: &network.SecurityGroupPropertiesFormat{},
 			}},
 			lbIP:   to.StringPtr("1.2.3.4"),
+			lbName: to.StringPtr("lb"),
 			wantLb: true,
 			expectedSg: &network.SecurityGroup{
 				Name: to.StringPtr("nsg"),
@@ -3321,7 +3323,38 @@ func TestReconcileSecurityGroup(t *testing.T) {
 								SourcePortRange:            to.StringPtr("*"),
 								DestinationPortRange:       to.StringPtr(strconv.Itoa(int(getBackendPort(80)))),
 								SourceAddressPrefix:        to.StringPtr("Internet"),
-								DestinationAddressPrefixes: to.StringSlicePtr([]string{}),
+								DestinationAddressPrefixes: to.StringSlicePtr([]string{"1.2.3.4", "5.6.7.8"}),
+								Access:                     network.SecurityRuleAccess("Allow"),
+								Priority:                   to.Int32Ptr(500),
+								Direction:                  network.SecurityRuleDirection("Inbound"),
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			desc:    "reconcileSecurityGroup shall create sgs with only IPv6 destination addresses for IPv6 services with floating IP disabled",
+			service: getTestService("test1", v1.ProtocolTCP, map[string]string{consts.ServiceAnnotationDisableLoadBalancerFloatingIP: "true"}, false, 80),
+			existingSgs: map[string]network.SecurityGroup{"nsg": {
+				Name:                          to.StringPtr("nsg"),
+				SecurityGroupPropertiesFormat: &network.SecurityGroupPropertiesFormat{},
+			}},
+			lbIP:   to.StringPtr("1234::5"),
+			lbName: to.StringPtr("lb"),
+			wantLb: true,
+			expectedSg: &network.SecurityGroup{
+				Name: to.StringPtr("nsg"),
+				SecurityGroupPropertiesFormat: &network.SecurityGroupPropertiesFormat{
+					SecurityRules: &[]network.SecurityRule{
+						{
+							Name: to.StringPtr("atest1-TCP-80-Internet"),
+							SecurityRulePropertiesFormat: &network.SecurityRulePropertiesFormat{
+								Protocol:                   network.SecurityRuleProtocol("Tcp"),
+								SourcePortRange:            to.StringPtr("*"),
+								DestinationPortRange:       to.StringPtr(strconv.Itoa(int(getBackendPort(80)))),
+								SourceAddressPrefix:        to.StringPtr("Internet"),
+								DestinationAddressPrefixes: to.StringSlicePtr([]string{"fc00::1", "fc00::2"}),
 								Access:                     network.SecurityRuleAccess("Allow"),
 								Priority:                   to.Int32Ptr(500),
 								Direction:                  network.SecurityRuleDirection("Inbound"),
@@ -3347,7 +3380,13 @@ func TestReconcileSecurityGroup(t *testing.T) {
 				t.Fatalf("TestCase[%d] meets unexpected error: %v", i, err)
 			}
 		}
-		sg, err := az.reconcileSecurityGroup("testCluster", &test.service, test.lbIP, &[]string{}, test.wantLb)
+		mockLBClient := az.LoadBalancerClient.(*mockloadbalancerclient.MockInterface)
+		mockLBBackendPool := az.LoadBalancerBackendPool.(*MockBackendPool)
+		if test.lbName != nil {
+			mockLBBackendPool.EXPECT().GetBackendPrivateIPs(gomock.Any(), gomock.Any(), gomock.Any()).Return([]string{"1.2.3.4", "5.6.7.8"}, []string{"fc00::1", "fc00::2"}).AnyTimes()
+			mockLBClient.EXPECT().Get(gomock.Any(), "rg", *test.lbName, gomock.Any()).Return(network.LoadBalancer{}, nil)
+		}
+		sg, err := az.reconcileSecurityGroup("testCluster", &test.service, test.lbIP, test.lbName, test.wantLb)
 		assert.Equal(t, test.expectedSg, sg, "TestCase[%d]: %s", i, test.desc)
 		assert.Equal(t, test.expectedError, err != nil, "TestCase[%d]: %s", i, test.desc)
 	}
@@ -3403,7 +3442,7 @@ func TestReconcileSecurityGroupLoadBalancerSourceRanges(t *testing.T) {
 	mockSGClient := az.SecurityGroupsClient.(*mocksecuritygroupclient.MockInterface)
 	mockSGClient.EXPECT().Get(gomock.Any(), az.ResourceGroup, gomock.Any(), gomock.Any()).Return(existingSg, nil)
 	mockSGClient.EXPECT().CreateOrUpdate(gomock.Any(), az.ResourceGroup, gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
-	sg, err := az.reconcileSecurityGroup("testCluster", &service, lbIP, &[]string{}, true)
+	sg, err := az.reconcileSecurityGroup("testCluster", &service, lbIP, nil, true)
 	assert.NoError(t, err)
 	assert.Equal(t, expectedSg, *sg)
 }
@@ -4447,8 +4486,8 @@ func TestIsFrontendIPConfigIsUnsafeToDelete(t *testing.T) {
 			unsafe: true,
 		},
 		{
-			desc: "isFrontendIPConfigUnsafeToDelete should return false if there is a " +
-				"loadBalancing rule from this service referencing the frontend IP config",
+			desc: "isFrontendIPConfigUnsafeToDelete should return true if there is a " +
+				"outbound rule referencing the frontend IP config",
 			existingLB: &network.LoadBalancer{
 				Name: to.StringPtr("lb"),
 				LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{
@@ -4468,7 +4507,7 @@ func TestIsFrontendIPConfigIsUnsafeToDelete(t *testing.T) {
 		},
 		{
 			desc: "isFrontendIPConfigUnsafeToDelete should return false if there is a " +
-				"outbound rule referencing the frontend IP config",
+				"loadBalancing rule from this service referencing the frontend IP config",
 			existingLB: &network.LoadBalancer{
 				Name: to.StringPtr("lb"),
 				LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{
