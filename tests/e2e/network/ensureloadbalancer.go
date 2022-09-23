@@ -156,7 +156,7 @@ var _ = Describe("Ensure LoadBalancer", Label(utils.TestSuiteLabelLB), func() {
 	})
 
 	It("should support BYO public IP", func() {
-		By("creating a public IP with tags")
+		By("creating a public IP")
 		ipName := basename + "-public-IP" + string(uuid.NewUUID())[0:4]
 		pip := defaultPublicIPAddress(ipName)
 		expectedTags := map[string]*string{
@@ -643,7 +643,7 @@ var _ = Describe("Ensure LoadBalancer", Label(utils.TestSuiteLabelLB), func() {
 		}()
 
 		By("testing if floating IP disabled in load balancer rule")
-		pipFrontendConfigID := getPIPFrontendConfigurationID(tc, ip, tc.GetResourceGroup(), "")
+		pipFrontendConfigID := getPIPFrontendConfigurationID(tc, ip, tc.GetResourceGroup())
 		pipFrontendConfigIDSplit := strings.Split(pipFrontendConfigID, "/")
 		Expect(len(pipFrontendConfigIDSplit)).NotTo(Equal(0))
 
