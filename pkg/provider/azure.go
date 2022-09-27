@@ -133,18 +133,18 @@ type Config struct {
 	RouteTableResourceGroup string `json:"routeTableResourceGroup,omitempty" yaml:"routeTableResourceGroup,omitempty"`
 	// (Optional) The name of the availability set that should be used as the load balancer backend
 	// If this is set, the Azure cloudprovider will only add nodes from that availability set to the load
-	// balancer backend pool. If this is not set, and multiple agent pools (availability sets) are used, then
-	// the cloudprovider will try to add all nodes to a single backend pool which is forbidden.
-	// In other words, if you use multiple agent pools (availability sets), you MUST set this field.
+	// balancer backend pool. If this is not set, and multiple node pools (availability sets) are used, then
+	// the cloudprovider will try to add all nodes to a single backend pool which is forbidden in the basic sku.
+	// In other words, if you use multiple node pools (availability sets), and loadBalancerSku is set to basic, you MUST set this field.
 	PrimaryAvailabilitySetName string `json:"primaryAvailabilitySetName,omitempty" yaml:"primaryAvailabilitySetName,omitempty"`
 	// The type of azure nodes. Candidate values are: vmss and standard.
 	// If not set, it will be default to standard.
 	VMType string `json:"vmType,omitempty" yaml:"vmType,omitempty"`
 	// The name of the scale set that should be used as the load balancer backend.
 	// If this is set, the Azure cloudprovider will only add nodes from that scale set to the load
-	// balancer backend pool. If this is not set, and multiple agent pools (scale sets) are used, then
-	// the cloudprovider will try to add all nodes to a single backend pool which is forbidden.
-	// In other words, if you use multiple agent pools (scale sets), you MUST set this field.
+	// balancer backend pool. If this is not set, and multiple node pools (scale sets) are used, then
+	// the cloudprovider will try to add all nodes to a single backend pool which is forbidden in the basic sku.
+	// In other words, if you use multiple node pools (scale sets), and loadBalancerSku is set to basic, you MUST set this field.
 	PrimaryScaleSetName string `json:"primaryScaleSetName,omitempty" yaml:"primaryScaleSetName,omitempty"`
 	// Tags determines what tags shall be applied to the shared resources managed by controller manager, which
 	// includes load balancer, security group and route table. The supported format is `a=b,c=d,...`. After updated
