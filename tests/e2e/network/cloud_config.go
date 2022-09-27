@@ -25,11 +25,14 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 
+	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
 	"sigs.k8s.io/cloud-provider-azure/tests/e2e/utils"
 
+	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2021-08-01/network"
 	"github.com/Azure/go-autorest/autorest/to"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -41,7 +44,7 @@ const (
 	cloudConfigKey       = "cloud-config"
 )
 
-var _ = Describe("Cloud Config", Label(utils.TestSuiteLabelCloudConfig), func() {
+var _ = Describe("Cloud Config", Label(utils.TestSuiteLabelCloudConfig, utils.TestSuiteLabelSerial), func() {
 	basename := "cloudconfig-service"
 	serviceName := "cloudconfig-test"
 
@@ -96,7 +99,7 @@ var _ = Describe("Cloud Config", Label(utils.TestSuiteLabelCloudConfig), func() 
 		tc = nil
 	})
 
-	It("should support cloud config `Tags`, `SystemTags` and `TagsMap`", Label(utils.TestSuiteLabelSerial), func() {
+	It("should support cloud config `Tags`, `SystemTags` and `TagsMap`", func() {
 		By("Updating Tags and TagsMap in Cloudconfig")
 		config, err := utils.GetConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey)
 		Expect(err).NotTo(HaveOccurred())
@@ -170,6 +173,80 @@ var _ = Describe("Cloud Config", Label(utils.TestSuiteLabelCloudConfig), func() 
 		By("Checking tags on the loadbalancer")
 		err = waitCompareLBTags(tc, expectedTags, ip)
 		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("should support cloud config `PrimaryScaleSetName` and `NodePoolsWithoutDedicatedSLB`", Label(utils.TestSuiteLabelMultiNodePools), func() {
+		// Get all the vmss names from all node's providerIDs
+		By("Get vmss names from node providerIDs")
+		vmssNames, resourceGroupName, err := utils.GetAllVMSSNamesAndResourceGroup(cs)
+		Expect(err).NotTo(HaveOccurred())
+
+		// Skip if there're less than two vmss
+		if len(vmssNames) < 2 {
+			Skip("nodePoolsWithoutDedicatedSLB tests only works for cluster with multiple vmss agent pools")
+		}
+
+		vmssList := vmssNames.List()[:2]
+
+		if !strings.EqualFold(os.Getenv(utils.LoadBalancerSkuEnv), string(network.PublicIPAddressSkuNameStandard)) {
+			Skip("nodePoolsWithoutDedicatedSLB tests only works for standard lb")
+		}
+
+		By("Updating PrimaryScaleSetName in cloud config")
+		config, err := utils.GetConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey)
+		Expect(err).NotTo(HaveOccurred())
+		config.EnableMultipleStandardLoadBalancers = true
+		config.NodePoolsWithoutDedicatedSLB = ""
+		originalPrimaryScaleSetName := config.PrimaryScaleSetName
+		config.PrimaryScaleSetName = vmssList[0]
+		err = utils.UpdateConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey, config)
+		Expect(err).NotTo(HaveOccurred())
+
+		service := utils.CreateLoadBalancerServiceManifest(serviceName, nil, labels, ns.Name, ports)
+		_, err = cs.CoreV1().Services(ns.Name).Create(context.TODO(), service, metav1.CreateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		utils.Logf("Successfully created LoadBalancer service " + serviceName + " in namespace " + ns.Name)
+
+		// wait and get service's public IP Address
+		By("Waiting for service exposure")
+		publicIP, err := utils.WaitServiceExposureAndValidateConnectivity(cs, ns.Name, serviceName, "")
+		Expect(err).NotTo(HaveOccurred())
+
+		defer func() {
+			By("Cleaning up test service")
+			err := utils.DeleteServiceIfExists(cs, ns.Name, serviceName)
+			Expect(err).NotTo(HaveOccurred())
+		}()
+
+		// validate load balancer backend pools for PrimaryScaleSetName
+		backendPoolVMSSNames := getVMSSNamesInLoadBalancerBackendPools(tc, publicIP, tc.GetResourceGroup(), resourceGroupName)
+		Expect(backendPoolVMSSNames.Equal(sets.NewString(vmssList[0]))).To(Equal(true))
+
+		By("Updating NodePoolsWithoutDedicatedSLB in cloud config")
+		config, err = utils.GetConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey)
+		Expect(err).NotTo(HaveOccurred())
+		config.NodePoolsWithoutDedicatedSLB = strings.Join(vmssList, consts.VMSetNamesSharingPrimarySLBDelimiter)
+		err = utils.UpdateConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey, config)
+		Expect(err).NotTo(HaveOccurred())
+
+		// wait and validate load balancer backend pools for NodePoolsWithoutDedicatedSLB
+		err = wait.PollImmediate(10*time.Second, 5*time.Minute, func() (done bool, err error) {
+			backendPoolVMSSNames := getVMSSNamesInLoadBalancerBackendPools(tc, publicIP, tc.GetResourceGroup(), resourceGroupName)
+			return backendPoolVMSSNames.Equal(sets.NewString(vmssList...)), nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		defer func() {
+			By("Cleaning up EnableMultipleStandardLoadBalancers in cloud config secret")
+			config, err := utils.GetConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey)
+			Expect(err).NotTo(HaveOccurred())
+			config.EnableMultipleStandardLoadBalancers = false
+			config.NodePoolsWithoutDedicatedSLB = ""
+			config.PrimaryScaleSetName = originalPrimaryScaleSetName
+			err = utils.UpdateConfigFromSecret(cs, cloudConfigNamespace, cloudConfigName, cloudConfigKey, config)
+			Expect(err).NotTo(HaveOccurred())
+		}()
+
 	})
 })
 
